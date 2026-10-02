@@ -165,3 +165,21 @@ Frontend polling regressions: `cd frontend && npm test`.
 Live investigations can revise an unsupported answer once using the original evidence and verifier feedback, then must pass citation, safety and semantic checks again. The verifier receives the original request and the trusted pre-execution workflow context, so a request to prepare a ticket is distinguished from claiming one was created. Failed correction stops with a specific evidence-verification message and no escalation draft. Safety/provider refusals are not routed through this repair path.
 
 Live completion budget is configurable through `SUPPORTOPS_MODEL_OUTPUT_TOKENS` (default 4000). The context packer reserves that budget before including evidence. `SUPPORTOPS_MODEL_CALL_TIMEOUT_SECONDS` defaults to 45; each call also respects the investigation's remaining deadline. A truncated response is not accepted as a valid answer. The local KodeKloud profile uses `SUPPORTOPS_REQUEST_DEADLINE_SECONDS=150` to accommodate verification and one correction.
+
+## Local semantic retrieval with MiniLM
+
+`SUPPORTOPS_EMBEDDING_MODE=sentence_transformers` uses `sentence-transformers/all-MiniLM-L6-v2` on the CPU. It works independently of demo/live LLM mode. Install with `uv sync --extra guardrails --extra local-embeddings`; the local startup script and Makefile include this extra. No embedding API key is needed. The first start downloads pinned public model weights into `var/models`; subsequent starts can use `SUPPORTOPS_LOCAL_EMBEDDING_OFFLINE=true`. Keep this false on a fresh checkout until the download completes.
+
+MiniLM produces native 384-dimensional normalized vectors. Inputs longer than its 256-token window are encoded in overlapping windows and pooled, rather than silently discarding the tail. A model/revision/window-policy fingerprint prevents mixing indexes. Startup checks every bundled runbook and reindexes changed/stale chunks, including after an interrupted migration; re-ingest custom tenant documents with `scripts/admin.py ingest` when changing encoders. Saved investigation evidence remains a historical snapshot.
+
+Search combines dense similarity and lexical matches with reciprocal-rank fusion, then deterministic cosine/keyword reranking. Semantic matches are eligible even without shared keywords. This is not a trained cross-encoder. Tenant and product-version filters apply before candidate selection.
+
+SQLite stores variable-length JSON vectors. Existing PostgreSQL installations must run `alembic upgrade head` before enabling MiniLM: the new migration removes the old fixed 256-dimensional column constraint without deleting existing data. Queries still filter exact encoder versions. PostgreSQL uses exact vector search; a future ANN index must use a specific dimension/model partition or expression index.
+
+The health endpoint and UI identify MiniLM retrieval. The cached encoder works offline; the live LLM still receives the selected redacted evidence via the configured provider. No embedding API calls or per-token embedding charges are involved, but local CPU/RAM and initial download bandwidth are used.
+
+For Compose, set `SUPPORTOPS_INSTALL_LOCAL_EMBEDDINGS=true` and `SUPPORTOPS_EMBEDDING_MODE=sentence_transformers` before building. Keep offline mode false until weights exist in the persistent app volume. Container execution with this optional dependency was not validated locally.
+
+Optional real-model regression checks (after caching): `RUN_LOCAL_EMBEDDING_TESTS=1 .venv/bin/pytest backend/tests/test_local_embeddings.py -q`.
+
+Model documentation: https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2

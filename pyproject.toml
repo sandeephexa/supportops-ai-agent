@@ -23,6 +23,7 @@ dependencies = [
   "alembic>=1.15,<2",
 ]
 [project.optional-dependencies]
+local-embeddings = ["sentence-transformers>=5.1,<6"]
 guardrails = ["guardrails-ai>=0.7,<1"]
 evals = [
     "langchain-community>=0.3.31,<0.4",

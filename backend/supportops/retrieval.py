@@ -81,7 +81,11 @@ class Retriever:
     def __init__(self, db, settings, telemetry):
         self.db, self.settings, self.telemetry = db, settings, telemetry
         self.embedder = None
-        if settings.mode == "live" and settings.embedding_mode != "local":
+        if settings.embedding_mode == "sentence_transformers":
+            from supportops.local_embeddings import LocalSentenceEmbeddings
+
+            self.embedder = LocalSentenceEmbeddings(settings)
+        elif settings.mode == "live" and settings.embedding_mode != "local":
             self.embedder = OpenAIEmbeddings(
                 model=settings.embedding_model,
                 dimensions=256,
@@ -90,7 +94,24 @@ class Retriever:
                 request_timeout=15,
                 max_retries=1,
             )
-        self.version = f"{settings.embedding_model}:256" if self.embedder else "demo-hash:256:v1"
+        self.version = (
+            self.embedder.version
+            if settings.embedding_mode == "sentence_transformers"
+            else f"{settings.embedding_model}:256"
+            if self.embedder
+            else "demo-hash:256:v1"
+        )
+        self.dimensions = 384 if settings.embedding_mode == "sentence_transformers" else 256
+        self.semantic = self.embedder is not None
+        if db is not None and db.is_postgres:
+            with db.session() as session:
+                dimension = session.scalar(
+                    text(
+                        "SELECT atttypmod FROM pg_attribute WHERE attrelid='documents'::regclass AND attname='vector'"
+                    )
+                )
+            if dimension not in (-1, self.dimensions):
+                raise ValueError("PostgreSQL vector dimensions require migration: run alembic upgrade head")
 
     def embed(self, texts):
         return self.embedder.embed_documents(texts) if self.embedder else [demo_embedding(x) for x in texts]
@@ -146,6 +167,7 @@ class Retriever:
                     lexical = session.scalars(
                         select(Document)
                         .where(*filters)
+                        .where(text("to_tsvector('english', content) @@ plainto_tsquery('english', :query)"))
                         .order_by(
                             text(
                                 "ts_rank_cd(to_tsvector('english', content), plainto_tsquery('english', :query)) DESC"
@@ -163,7 +185,7 @@ class Retriever:
                     )[:30]
                     q = Counter(tokens(query))
                     lexical = sorted(
-                        docs,
+                        [doc for doc in docs if set(tokens(doc.content)) & set(q)],
                         key=lambda d: sum(min(n, Counter(tokens(d.content))[t]) for t, n in q.items()),
                         reverse=True,
                     )[:30]
@@ -178,11 +200,21 @@ class Retriever:
                     doc = by_id[doc_id]
                     if INJECTION.search(doc.content):
                         continue
-                    # Lightweight deterministic reranker; cross-encoder is an explicit future upgrade.
+                    # Deterministic cosine/keyword reranking; no trained cross-encoder.
                     overlap = len(query_terms & set(tokens(doc.content + " " + doc.section)))
-                    if overlap == 0:
+                    if overlap == 0 and not self.semantic:
                         continue
-                    candidates.append((score + overlap * 0.003, doc))
+                    semantic_score = (
+                        sum(a * b for a, b in zip(doc.embedding, vector, strict=True)) if self.semantic else 0
+                    )
+                    candidates.append(
+                        (
+                            score
+                            + max(0, semantic_score) * 0.1
+                            + overlap * (0.0003 if self.semantic else 0.003),
+                            doc,
+                        )
+                    )
                 candidates.sort(key=lambda pair: pair[0], reverse=True)
                 evidence, seen = [], set()
                 for score, doc in candidates:
@@ -205,7 +237,11 @@ class Retriever:
                     if len(evidence) >= limit:
                         break
             attrs.update(
-                candidate_count=len(by_id), selected_count=len(evidence), index_version="runbooks-v1"
+                candidate_count=len(by_id),
+                selected_count=len(evidence),
+                index_version="runbooks-v2",
+                embedding_dimensions=self.dimensions,
+                semantic=self.semantic,
             )
             return evidence
 

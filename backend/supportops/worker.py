@@ -70,8 +70,15 @@ class Worker:
                     "citation_quote",
                 }:
                     case.error = "Evidence verification failed: the generated answer could not be supported by its sources after one correction. No escalation was created. Start a new investigation with more specific evidence or request manual review."
+                    if exc.code in {"citation_missing", "citation_quote"}:
+                        case.error = "Evidence verification failed: the generated answer contains invalid citations after one correction. No escalation was created. Start a new investigation or request manual review."
                     if isinstance(exc, EvidenceVerificationFailure):
-                        case.error += " Verifier concerns (model assessment): " + " ".join(exc.issues)
+                        label = (
+                            " Citation validation: "
+                            if exc.code in {"citation_missing", "citation_quote"}
+                            else " Verifier concerns (model assessment): "
+                        )
+                        case.error += label + " ".join(exc.issues)
                 elif isinstance(exc, ModelUnavailable) and exc.code == "output_token_limit":
                     case.error = "Model output limit reached: the structured answer was cut off. Increase SUPPORTOPS_MODEL_OUTPUT_TOKENS within the model context limit before retrying."
                 elif isinstance(exc, ModelUnavailable) and exc.code == "provider_request_rejected":

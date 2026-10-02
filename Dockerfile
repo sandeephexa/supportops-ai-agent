@@ -12,7 +12,8 @@ RUN pip install --no-cache-dir uv==0.11.29
 COPY pyproject.toml uv.lock ./
 COPY backend/ ./backend/
 COPY data/ ./data/
-RUN uv sync --frozen --no-dev --extra guardrails --no-editable
+ARG LOCAL_EMBEDDINGS=false
+RUN if [ "$LOCAL_EMBEDDINGS" = "true" ]; then uv sync --frozen --no-dev --extra guardrails --extra local-embeddings --no-editable; else uv sync --frozen --no-dev --extra guardrails --no-editable; fi
 COPY alembic.ini ./
 COPY migrations/ ./migrations/
 COPY scripts/ ./scripts/

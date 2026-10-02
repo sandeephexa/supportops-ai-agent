@@ -47,7 +47,7 @@ class Document(Base):
     parent_content: Mapped[str] = mapped_column(Text)
     content_hash: Mapped[str] = mapped_column(String(64))
     embedding: Mapped[list] = mapped_column(JSON)
-    vector: Mapped[list | None] = mapped_column(Vector(256).with_variant(JSON(), "sqlite"), nullable=True)
+    vector: Mapped[list | None] = mapped_column(Vector().with_variant(JSON(), "sqlite"), nullable=True)
     embedding_version: Mapped[str] = mapped_column(String(100))
     updated_at: Mapped[float] = mapped_column(Float, default=time.time)
     active: Mapped[bool] = mapped_column(Boolean, default=True)

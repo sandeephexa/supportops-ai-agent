@@ -49,3 +49,25 @@ Live correction also exposed the old hard-coded 1,400-token completion limit. Th
 The fresh Meridian case `7da13ea5-025c-41b3-8658-e99b253d45d2` resumed its interrupted correction and passed independent verification. It is awaiting human approval; no ticket was created. Its answer qualifies incident causation and cites the service/region match. Original failed case `13f6e8b2-9434-49b6-964d-5ad3cb21b06d` remains as a historical record with a diagnostic explanation.
 
 Validation: full backend run passed 55 tests with one PostgreSQL test skipped; two subsequently added token-budget tests passed in the focused 12-test routing/grounding suite. All 12 development evaluation scenarios passed. Ruff checks passed. The browser confirmed the new case reached approval.
+
+## Local MiniLM semantic embeddings — 2 October 2026
+
+Enabled pinned `sentence-transformers/all-MiniLM-L6-v2` at revision `1110a243fdf4706b3f48f1d95db1a4f5529b4d41`, CPU inference, cached safetensors, no remote model code, 384 native dimensions, and normalized overlapping-window pooling for long input. The live deployment is configured to load cached weights offline. Its KodeKloud LLM configuration is unchanged.
+
+Reindexed bundled runbooks with a model/revision/encoding-policy fingerprint. Partial-index recovery checks each file. Removed the keyword-overlap requirement from semantic candidates and added cosine-aware reranking. Database migration permits variable vector dimensions with exact embedding-version filtering; PostgreSQL migration, schema drift check, mixed 256/384-vector search and tenant isolation were exercised in a disposable database that was removed afterward.
+
+Validation: 62 backend tests passed (including real offline MiniLM and PostgreSQL), 7 frontend tests passed, production frontend build and Ruff passed, and all 12 development evaluation scenarios passed with local embeddings. Three paraphrase checks retrieved the expected rate-limit, credential-remediation and incident runbooks first. These checks are development evidence, not a held-out retrieval benchmark.
+
+Live case `6ad058e2-ba35-4891-99bc-42cd166eeb31` returned verified Atlas rate-limit findings and asked for missing operational details; it had no error. Its retrieval spans record `semantic=true`, `embedding_dimensions=384` and `st:c6c1836bed62a7f2:384:window-pool-v1`. The console shows MiniLM semantic retrieval. Existing investigation snapshots remain unchanged; SQLite backups were saved in ignored `var/` before reindexing.
+
+The optional MiniLM Docker build configuration is provided but Docker execution remains unverified locally. Custom tenant documents must be re-ingested after changing encoder versions. Inference embeddings are local; the live LLM still receives selected evidence through its configured API.
+
+## Atlas citation provenance repair — 2 October 2026
+
+The saved checkpoint for failed case `204c4eef-fe60-4c44-aa6d-d0a820356981` showed that the corrected draft joined tool and runbook excerpts with semicolons into a single quote. Those individual excerpts existed, but the combined quote was not a contiguous excerpt of any cited source. The deterministic provenance rejection was correct. Earlier semantic feedback also objected to proposal status because the verifier's trusted workflow contract did not explicitly describe proposal preparation.
+
+The claim schema and generation instructions now require a single contiguous supporting excerpt from one cited source, including multi-source inferences. Provenance feedback identifies all affected claim field locations so the existing single correction attempt can address them. Generation and semantic verification share the explicit pre-proposal workflow contract. Invalid quotes still fail closed; the independent semantic check remains required. Citation failures are now labeled as citation validation rather than a model assessment, without implying that the user's question was at fault.
+
+Validation: 61 backend tests passed; three optional real-model/PostgreSQL tests were skipped in this run. Two new regression tests cover joined-source quotes, precise feedback, correction, and semantic verification before completion. The focused six-test repair suite and Ruff passed after the final error-message edit.
+
+Restarted the local app and submitted the user's exact Atlas question as fresh case `1f9baec7-39b6-485b-bf7c-3f34546b3f34`. It passed provenance, Guardrails AI and semantic verification on the first draft (`verified=true`, zero revisions), returned cited findings, and reached `needs_information` with no error. It reports 23 HTTP 429 failures, no active regional incident and standard support; it asks for missing quota/recovery and coverage details. No escalation draft or ticket was created. MiniLM retrieval remains active. The original failed case is preserved as historical evidence. This successful live run does not guarantee that every future model output will satisfy verification.

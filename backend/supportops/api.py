@@ -125,9 +125,17 @@ def create_app(settings=None):
             "mode": settings.mode,
             "auth_mode": settings.auth_mode,
             "connectors": "synthetic",
-            "retrieval": "provider_embeddings"
+            "retrieval": "local_sentence_transformers"
+            if settings.embedding_mode == "sentence_transformers"
+            else "provider_embeddings"
             if settings.mode == "live" and settings.embedding_mode != "local"
             else "local_lexical_hash",
+            "embedding_model": settings.local_embedding_model
+            if settings.embedding_mode == "sentence_transformers"
+            else settings.embedding_model
+            if settings.mode == "live" and settings.embedding_mode != "local"
+            else "lexical-hash",
+            "embedding_dimensions": 384 if settings.embedding_mode == "sentence_transformers" else 256,
             "version": "0.1.0",
         }
 

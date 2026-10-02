@@ -176,7 +176,7 @@ class Workflow:
                 # Only provenance mistakes can be revised; sensitive/unsafe output stops immediately.
                 if exc.code not in {"citation_missing", "citation_quote"}:
                     raise
-                feedback, failure_code = [str(exc)], exc.code
+                feedback, failure_code = exc.issues, exc.code
             if not feedback and self.settings.mode == "live":
                 verdict = self.models.verify_grounding(
                     case.id,

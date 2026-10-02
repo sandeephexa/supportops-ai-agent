@@ -1,5 +1,7 @@
+import pytest
 from sqlalchemy import func, select
 from supportops.db import Ticket
+from supportops.guardrails import SafetyViolation, verify_answer
 from supportops.schemas import GroundingVerdict, Investigation
 
 
@@ -96,3 +98,88 @@ def test_failure_records_identify_the_synthetic_connectors_service(client):
     assert facts["region"] == "us-east-1"
     assert facts["failed_jobs"] == 112
     assert evidence["version"] == "synthetic-v2"
+
+
+def test_combined_source_quotes_are_rejected_with_each_affected_field():
+    # Regression: real Atlas draft joined valid tool + runbook excerpts with a semicolon.
+    evidence = [
+        {"id": "failures", "content": '"failure_code": "RATE_LIMIT", "http_status": 429'},
+        {
+            "id": "runbook",
+            "content": "HTTP 429 with error code RATE_LIMIT indicates that the integration exceeded its request quota.",
+        },
+        {"id": "incidents", "content": '"active_incident": null, "region": "eu-west-1"'},
+    ]
+    result = {
+        "summary": "Rate limiting may explain these failures.",
+        "confirmed_facts": [],
+        "hypotheses": [
+            {
+                "text": "Rate limiting likely explains the failures.",
+                "evidence_ids": ["failures", "runbook"],
+                "quote": evidence[0]["content"] + "; " + evidence[1]["content"],
+            },
+            {
+                "text": "A regional incident is not supported as the cause.",
+                "evidence_ids": ["incidents", "failures"],
+                "quote": evidence[2]["content"] + "; " + evidence[0]["content"],
+            },
+        ],
+        "recommended_steps": [],
+        "unresolved_questions": [],
+        "needs_escalation": False,
+    }
+    with pytest.raises(SafetyViolation) as error:
+        verify_answer(result, evidence)
+    assert error.value.code == "citation_quote"
+    assert len(error.value.issues) == 2
+    assert "hypotheses[0].quote" in error.value.issues[0]
+    assert "hypotheses[1].quote" in error.value.issues[1]
+    # A multi-source inference may quote one supporting source verbatim.
+    result["hypotheses"][0]["quote"] = evidence[1]["content"]
+    result["hypotheses"][1]["quote"] = evidence[2]["content"]
+    assert verify_answer(result, evidence).needs_escalation is False
+
+
+def test_citation_repair_gets_field_feedback_then_requires_semantic_verification(client, monkeypatch):
+    workflow = client.app.state.workflow
+    workflow.settings = workflow.settings.model_copy(update={"mode": "live"})
+    models = client.app.state.models
+    original = models.synthesize
+    calls = {"revise": 0, "verify": 0}
+
+    def synthesize(*args, **kwargs):
+        draft = original(*args, **kwargs)
+        draft.confirmed_facts[0].quote += "; fabricated connector text"
+        draft.needs_escalation = False
+        return draft
+
+    def revise(case_id, question, result, evidence, feedback, deadline):
+        calls["revise"] += 1
+        assert "confirmed_facts[0].quote" in feedback[0]
+        assert "ONE cited source" in feedback[0]
+        draft = Investigation.model_validate(result)
+        claim = draft.confirmed_facts[0]
+        claim.quote = next(e["content"] for e in evidence if e["id"] == claim.evidence_ids[0])
+        return draft
+
+    def verify(case_id, result, evidence, deadline, question=""):
+        calls["verify"] += 1
+        verify_answer(result, evidence)
+        return GroundingVerdict(supported=True, unsupported_claims=[])
+
+    monkeypatch.setattr(models, "synthesize", synthesize)
+    monkeypatch.setattr(models, "revise", revise)
+    monkeypatch.setattr(models, "verify_grounding", verify)
+    case = client.post(
+        "/api/cases",
+        json={"account_id": "atlas", "question": "Investigate HTTP 429. Do not create an escalation."},
+    ).json()
+    client.app.state.worker.tick()
+    result = client.get(f"/api/cases/{case['id']}").json()
+    assert result["status"] in {"completed", "needs_information"}
+    assert result["draft"] is None
+    assert result["error"] is None
+    assert calls == {"revise": 1, "verify": 1}
+    with client.app.state.db.session() as session:
+        assert session.scalar(select(func.count()).select_from(Ticket)) == 0

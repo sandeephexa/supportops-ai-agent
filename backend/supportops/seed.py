@@ -1,7 +1,11 @@
+import hashlib
+
 from sqlalchemy import select
 
 from supportops.config import ROOT
 from supportops.db import Account, Document, User
+from supportops.retrieval import chunk_markdown
+from supportops.security import mask
 
 ACCOUNTS = [
     dict(
@@ -105,9 +109,17 @@ def seed(db, retriever):
         ]:
             if not session.get(User, user.id):
                 session.add(user)
-        existing = session.scalar(
-            select(Document.id).where(Document.embedding_version == retriever.version).limit(1)
-        )
-    if not existing:
-        for path in sorted((ROOT / "data" / "runbooks").glob("*.md")):
+    # Check each file, so an interrupted reindex is resumed rather than accepted as complete.
+    for path in sorted((ROOT / "data" / "runbooks").glob("*.md")):
+        clean, _ = mask(path.read_text())
+        expected = {
+            f"public:{path.stem}:v3:{i}": hashlib.sha256(content.encode()).hexdigest()
+            for i, (_, _, content, _) in enumerate(chunk_markdown(clean))
+        }
+        with db.session() as session:
+            rows = session.scalars(
+                select(Document).where(Document.id.like(f"public:{path.stem}:v3:%"), Document.active)
+            ).all()
+            current = {row.id: row.content_hash for row in rows if row.embedding_version == retriever.version}
+        if current != expected:
             retriever.ingest(path)

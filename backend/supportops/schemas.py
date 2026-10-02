@@ -31,7 +31,11 @@ class Claim(StrictModel):
     text: str
     evidence_ids: list[str]
     # Exact supporting excerpt allows deterministic provenance checks.
-    quote: str
+    quote: str = Field(
+        description="Copy one exact, contiguous excerpt from the content of ONE cited evidence source. "
+        "It must directly support this claim. Do not combine excerpts, paraphrase, add ellipses, "
+        "or alter punctuation. For multiple sources, choose one supporting excerpt or split the claim."
+    )
 
 
 class Investigation(StrictModel):

@@ -453,7 +453,7 @@ export function App() {
           <div className="environment">
             <span className="environment-dot" />
             {health?.mode === "live"
-              ? `Live model · ${health.retrieval === "local_lexical_hash" ? "local retrieval · " : ""}synthetic connectors`
+              ? `Live model · ${health.retrieval === "local_sentence_transformers" ? "MiniLM semantic retrieval · " : health.retrieval === "local_lexical_hash" ? "local retrieval · " : ""}synthetic connectors`
               : "Demo environment"}
             <span className="topbar-divider" />
             <LockKeyhole size={13} />

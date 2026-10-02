@@ -31,7 +31,13 @@ class Settings(BaseSettings):
     fallback_model: str = ""
     fallback_base_url: str = ""
     fallback_api_key: str = ""
-    embedding_mode: Literal["auto", "local"] = "auto"
+    embedding_mode: Literal["auto", "local", "sentence_transformers"] = "auto"
+    local_embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    local_embedding_revision: str = Field(
+        default="1110a243fdf4706b3f48f1d95db1a4f5529b4d41", pattern=r"^[0-9a-f]{40}$"
+    )
+    local_embedding_cache: str = str(ROOT / "var" / "models")
+    local_embedding_offline: bool = False
     embedding_model: str = "text-embedding-3-small"
     enable_guardrails: bool = False
     otlp_endpoint: str = ""
