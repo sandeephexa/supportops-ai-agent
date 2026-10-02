@@ -1,0 +1,61 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_DB: supportops
+      POSTGRES_USER: supportops
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local-demo-only}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U supportops -d supportops"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+  app:
+    build: .
+    ports: ["127.0.0.1:8000:8000"]
+    environment:
+      SUPPORTOPS_MODE: ${SUPPORTOPS_MODE:-demo}
+      SUPPORTOPS_AUTH_MODE: ${SUPPORTOPS_AUTH_MODE:-demo}
+      SUPPORTOPS_DATABASE_URL: postgresql+psycopg://supportops:${POSTGRES_PASSWORD:-local-demo-only}@postgres:5432/supportops
+      SUPPORTOPS_CHECKPOINT_URL: postgresql://supportops:${POSTGRES_PASSWORD:-local-demo-only}@postgres:5432/supportops
+      SUPPORTOPS_API_KEY: ${SUPPORTOPS_API_KEY:-}
+      SUPPORTOPS_BASE_URL: ${SUPPORTOPS_BASE_URL:-https://api.openai.com/v1}
+      SUPPORTOPS_MODEL_PRICES: ${SUPPORTOPS_MODEL_PRICES:-}
+      SUPPORTOPS_EMBEDDING_MODE: ${SUPPORTOPS_EMBEDDING_MODE:-auto}
+      SUPPORTOPS_EMBEDDING_MODEL: ${SUPPORTOPS_EMBEDDING_MODEL:-text-embedding-3-small}
+      SUPPORTOPS_MODEL_OUTPUT_TOKENS: ${SUPPORTOPS_MODEL_OUTPUT_TOKENS:-4000}
+      SUPPORTOPS_MODEL_CALL_TIMEOUT_SECONDS: ${SUPPORTOPS_MODEL_CALL_TIMEOUT_SECONDS:-45}
+      SUPPORTOPS_REQUEST_DEADLINE_SECONDS: ${SUPPORTOPS_REQUEST_DEADLINE_SECONDS:-90}
+      SUPPORTOPS_MAX_CONTEXT_TOKENS: ${SUPPORTOPS_MAX_CONTEXT_TOKENS:-6000}
+      SUPPORTOPS_MODEL_CONTEXT_WINDOW: ${SUPPORTOPS_MODEL_CONTEXT_WINDOW:-16000}
+      SUPPORTOPS_FALLBACK_CONTEXT_WINDOW: ${SUPPORTOPS_FALLBACK_CONTEXT_WINDOW:-16000}
+      SUPPORTOPS_SMALL_MODEL: ${SUPPORTOPS_SMALL_MODEL:-gpt-4.1-mini}
+      SUPPORTOPS_REASONING_MODEL: ${SUPPORTOPS_REASONING_MODEL:-gpt-4.1}
+      SUPPORTOPS_FALLBACK_MODEL: ${SUPPORTOPS_FALLBACK_MODEL:-}
+      SUPPORTOPS_FALLBACK_BASE_URL: ${SUPPORTOPS_FALLBACK_BASE_URL:-}
+      SUPPORTOPS_FALLBACK_API_KEY: ${SUPPORTOPS_FALLBACK_API_KEY:-}
+      SUPPORTOPS_ENABLE_GUARDRAILS: "true"
+      SUPPORTOPS_OTLP_ENDPOINT: ${SUPPORTOPS_OTLP_ENDPOINT:-}
+      SUPPORTOPS_OIDC_ISSUER: ${SUPPORTOPS_OIDC_ISSUER:-}
+      SUPPORTOPS_OIDC_AUDIENCE: ${SUPPORTOPS_OIDC_AUDIENCE:-}
+      SUPPORTOPS_OIDC_JWKS_URL: ${SUPPORTOPS_OIDC_JWKS_URL:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes: ["app-data:/app/var"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    restart: unless-stopped
+  phoenix:
+    image: arizephoenix/phoenix:latest
+    profiles: ["observability"]
+    ports: ["127.0.0.1:6006:6006"]
+    environment:
+      PHOENIX_WORKING_DIR: /data
+    volumes: ["phoenix-data:/data"]
+volumes:
+  postgres-data:
+  app-data:
+  phoenix-data:

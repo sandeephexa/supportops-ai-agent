@@ -1,0 +1,81 @@
+name: supportops-ci
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: supportops
+          POSTGRES_PASSWORD: test-only
+          POSTGRES_DB: supportops_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U supportops -d supportops_test"
+          --health-interval 5s --health-timeout 5s --health-retries 15
+    env:
+      TEST_POSTGRES_URL: postgresql+psycopg://supportops:test-only@localhost:5432/supportops_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.29"
+      - run: uv sync --frozen --python 3.12 --extra guardrails
+      - run: uv run --extra guardrails ruff check backend scripts migrations
+      - run: uv run --extra guardrails ruff format --check backend scripts migrations
+      - run: uv run --extra guardrails pytest --cov=supportops --cov-report=term-missing -q
+      - run: uv run --extra guardrails python scripts/evaluate.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evaluation-report
+          path: var/eval-report.json
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.29"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: uv sync --frozen --python 3.12
+      - run: npm ci && npm test && npm run build && npx playwright install --with-deps chromium
+        working-directory: frontend
+      - name: Start local app
+        run: |
+          uv run uvicorn supportops.api:app --host 127.0.0.1 --port 8765 > /tmp/supportops.log 2>&1 &
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8765/api/health; then exit 0; fi
+            sleep 1
+          done
+          cat /tmp/supportops.log
+          exit 1
+      - run: npm run test:e2e
+        working-directory: frontend
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-evidence
+          path: |
+            var/screenshots/
+            frontend/test-results/
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose up --build -d
+      - run: |
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8000/api/health; then exit 0; fi
+            sleep 2
+          done
+          docker compose logs
+          exit 1
+      - run: docker compose down
+        if: always()
