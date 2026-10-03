@@ -22,5 +22,5 @@ RUN useradd --uid 10001 --create-home supportops && mkdir -p /app/var && chown -
 USER supportops
 ENV PATH="/app/.venv/bin:$PATH" SUPPORTOPS_ENABLE_GUARDRAILS=true SUPPORTOPS_PROJECT_ROOT=/app SUPPORTOPS_AUTO_CREATE_SCHEMA=false
 EXPOSE 8000
-HEALTHCHECK --interval=20s --timeout=5s CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')"
+HEALTHCHECK --interval=20s --timeout=5s CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/ready')"
 CMD ["sh", "scripts/container-start.sh"]

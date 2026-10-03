@@ -47,6 +47,10 @@ def evaluate(dataset, output, live=False, ragas=False):
     with tempfile.TemporaryDirectory(prefix="supportops-eval-") as temporary:
         settings = configured.model_copy(
             update={
+                "environment": "development",
+                "seed_demo_data": True,
+                "auto_create_schema": True,
+                "allowed_hosts": ["testserver"],
                 "mode": "live" if live else "demo",
                 "auth_mode": "demo",
                 "database_url": f"sqlite:///{temporary}/app.db",

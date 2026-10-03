@@ -92,6 +92,11 @@ def authorize_case(db, principal: Principal, case_id: str) -> Case:
     return case
 
 
+def require_engineer(principal: Principal):
+    if principal.role != "engineer":
+        raise HTTPException(403, "An engineer role is required for this action")
+
+
 def current_user(request: Request) -> Principal:
     settings = request.app.state.settings
     if settings.auth_mode == "demo":
@@ -113,6 +118,8 @@ def current_user(request: Request) -> Principal:
                 options={"require": ["exp", "iat", "sub", "iss", "aud"]},
             )
             user_id = claims["sub"]
-        except Exception:
+        except jwt.PyJWKClientConnectionError:
+            raise HTTPException(503, "Identity provider unavailable; try again later") from None
+        except jwt.PyJWTError:
             raise HTTPException(401, "Invalid access token") from None
     return get_principal(request.app.state.db, user_id)

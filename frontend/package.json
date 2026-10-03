@@ -8,7 +8,9 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 127.0.0.1",
     "test:e2e": "playwright test",
-    "test": "vitest run"
+    "test": "vitest run",
+    "check": "tsc --noEmit && prettier --check src tsconfig.json",
+    "format": "prettier --write src tsconfig.json"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",

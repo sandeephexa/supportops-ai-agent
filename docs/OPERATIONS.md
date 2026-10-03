@@ -8,6 +8,20 @@ Container deployment: PostgreSQL/pgvector, Alembic startup migration, a non-root
 
 Controlled enterprise deployment requires: approved model/embedding endpoints, a managed secret store, TLS ingress, OIDC, provisioned memberships, network egress restrictions, non-demo connectors, database backups/PITR, encrypted storage, retention/deletion policies, and explicit incident ownership. These controls are deployment responsibilities, not claims made by the local demo.
 
+Use this configuration in addition to your actual database, identity and provider settings:
+
+```dotenv
+SUPPORTOPS_ENVIRONMENT=production
+SUPPORTOPS_AUTH_MODE=oidc
+SUPPORTOPS_SEED_DEMO_DATA=false
+SUPPORTOPS_AUTO_CREATE_SCHEMA=false
+SUPPORTOPS_ALLOWED_HOSTS=["support.example.com","127.0.0.1"]
+```
+
+Replace the hostname with your ingress host. Production startup rejects demo authentication/seeding, SQLite, automatic schema creation, non-HTTPS identity/model endpoints, and unrestricted/test hosts. Numeric request, tool, context and approval budgets are validated at startup. Configuration representations omit API keys and database credentials; environment files remain excluded from Git and Docker context. The Compose password default is development-only: replace it using deployment secret management. Existing demo records are not removed by turning off seeding; provision real memberships and account adapters in a clean database.
+
+`/api/health` reports process configuration; `/api/ready` checks application database connectivity and the embedded worker thread (when enabled). The container healthcheck uses readiness. It does not probe paid LLM endpoints, checkpoint database connectivity or external connectors. Use separate dependency monitoring and queue-age alerts for those failure modes. Hashed frontend assets have immutable cache headers; API responses and the HTML entry point remain uncached. Build a complete release artifact before starting a new process rather than rebuilding the served directory in place.
+
 ## Startup and migration
 
 Do not run multiple application instances racing to perform schema migrations in production. Run Alembic as a release job, then start API/worker replicas. The provided single-instance Compose command runs migrations before Uvicorn.
@@ -24,7 +38,9 @@ Local backup: stop the app and copy both `var/supportops.db` and `var/checkpoint
 - **Expired approval:** start a fresh investigation to refresh evidence and issue a new payload hash. An expired approval cannot authorize a new ticket.
 - **Revoked access:** reads and execution deny access even if a prior checkpoint or approval exists. Re-provision only through authorized identity administration.
 - **Duplicate approval:** an identical decision is idempotent. A conflicting decision is rejected. The ticket action uses a deterministic idempotency key.
-- **Database unavailable:** admission and writes fail; do not bypass audit persistence. Restore database service and then inspect interrupted cases.
+- **Database unavailable:** API storage failures return a generic 503 with `Retry-After`, without exposing SQL or connection details. Admission and writes fail; do not bypass audit persistence. Restore database service and then inspect interrupted cases.
+- **Identity provider unavailable:** JWKS connection failures return 503 rather than incorrectly marking the token invalid. Invalid tokens still return 401.
+- **Trace storage failure:** optional trace inserts log the exception type and preserve the workflow result or original error. Audit, checkpoint and action writes remain mandatory; this is not a fallback around them.
 - **Real remote write timeout:** before integrating a remote ticket provider, implement lookup by idempotency key and reconciliation. The synthetic transaction currently avoids this distributed ambiguity.
 
 ## Observability
@@ -33,7 +49,7 @@ Set `SUPPORTOPS_OTLP_ENDPOINT` to a trusted OTLP/HTTP `/v1/traces` endpoint. For
 
 Track queue age, machine processing time, error rate, model fallback rate, tool failures, approval wait time, duplicate attempts, and total cost including failures. Nested span durations must not be summed as request latency. The UI uses investigation root spans for machine time and counts tokens from model spans.
 
-The initial admission limit is 20 cases per tenant per minute. PostgreSQL admission takes an advisory transaction lock; SQLite's demo path is not a distributed rate limiter. Add authenticated edge quotas and concurrent-job limits for a public deployment.
+The initial admission limit is 20 cases per tenant per minute. PostgreSQL admission takes an advisory transaction lock; SQLite serializes admission with `BEGIN IMMEDIATE`. This is not a distributed edge rate limiter. Add authenticated edge quotas and concurrent-job limits for a public deployment.
 
 No SLO is claimed from demo measurements. Establish workload, concurrency, dataset, providers, model versions, and region before measuring p50/p95 and setting targets. The synchronous polling worker favors determinism over high throughput.
 
@@ -47,4 +63,4 @@ Protect the database and its backups because redacted operational data may still
 
 GitHub Actions defines three jobs: backend/security/evals plus PostgreSQL integration; browser workflows on Chromium; and container startup. Credentials used by these jobs are ephemeral test values. No live provider credentials are required. Add paid-provider evaluation as a protected workflow with explicit budgets, not on arbitrary pull requests.
 
-Run `pytest`, `scripts/evaluate.py`, and `npm run build` locally. Browser and PostgreSQL tests require OS process privileges; some desktop sandboxes prohibit Chromium's Mach ports and PostgreSQL shared memory. In that case use the app browser for manual UI verification and execute the full test suite in CI or a normal local terminal. Do not interpret a sandbox launch failure as a passing test.
+Run `pytest`, `scripts/evaluate.py`, `npm run check`, `npm test`, and `npm run build` locally. Do not run backend tests concurrently with the frontend build: Vite replaces the static asset directory while tests instantiate the app. Browser and PostgreSQL tests require OS process privileges; some desktop sandboxes prohibit Chromium's Mach ports and PostgreSQL shared memory. In that case use the app browser for manual UI verification and execute the full test suite in CI or a normal local terminal. Do not interpret a sandbox launch failure as a passing test.

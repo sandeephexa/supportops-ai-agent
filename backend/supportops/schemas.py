@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class StrictModel(BaseModel):
@@ -11,10 +11,15 @@ class CreateCase(StrictModel):
     account_id: str = Field(min_length=1, max_length=64)
     question: str = Field(min_length=10, max_length=6000)
 
+    @field_validator("account_id", "question", mode="before")
+    @classmethod
+    def trim_text(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
 
 class ApprovalRequest(StrictModel):
-    payload_hash: str = Field(min_length=64, max_length=64)
-    approved: bool
+    payload_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    approved: bool = Field(strict=True)
 
 
 class Evidence(StrictModel):

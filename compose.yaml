@@ -19,6 +19,9 @@ services:
         LOCAL_EMBEDDINGS: ${SUPPORTOPS_INSTALL_LOCAL_EMBEDDINGS:-false}
     ports: ["127.0.0.1:8000:8000"]
     environment:
+      SUPPORTOPS_ENVIRONMENT: ${SUPPORTOPS_ENVIRONMENT:-development}
+      SUPPORTOPS_SEED_DEMO_DATA: ${SUPPORTOPS_SEED_DEMO_DATA:-true}
+      SUPPORTOPS_ALLOWED_HOSTS: ${SUPPORTOPS_ALLOWED_HOSTS:-["localhost","127.0.0.1","[::1]","testserver"]}
       SUPPORTOPS_MODE: ${SUPPORTOPS_MODE:-demo}
       SUPPORTOPS_AUTH_MODE: ${SUPPORTOPS_AUTH_MODE:-demo}
       SUPPORTOPS_DATABASE_URL: postgresql+psycopg://supportops:${POSTGRES_PASSWORD:-local-demo-only}@postgres:5432/supportops

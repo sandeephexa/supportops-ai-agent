@@ -135,19 +135,7 @@ class Workflow:
                 evidence.extend(x for x in extra if x["id"] not in known)
             # Current facts first, then compact section windows. Never mix model-version indexes.
             evidence.sort(key=lambda x: x["source"] != "tool")
-            window = (
-                min(self.settings.model_context_window, self.settings.fallback_context_window)
-                if self.settings.fallback_model
-                else self.settings.model_context_window
-            )
-            # Reserve completion plus instructions, schemas, question and tool definitions.
-            budget = min(
-                self.settings.max_context_tokens,
-                window - self.settings.model_output_tokens - 5000 - len(case.question.encode()),
-            )
-            if budget < 500:
-                raise SafetyViolation("Configured context window cannot safely fit this request")
-            packed = pack_context(evidence, budget, state["plan"]["query"])
+            packed = pack_context(evidence, self.context_budget(case.question), state["plan"]["query"])
             attrs.update(
                 tool_calls=len(called), evidence_count=len(packed), retrieval_expansions=int(bool(failures))
             )

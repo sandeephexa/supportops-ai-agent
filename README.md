@@ -125,6 +125,10 @@ For externally accessible deployments, use `SUPPORTOPS_AUTH_MODE=oidc` with `SUP
 
 Provision authorized subjects via `scripts/admin.py provision-user`. This is an operator CLI, never an API endpoint. Restrict access to its database credentials.
 
+Set `SUPPORTOPS_ENVIRONMENT=production` for deployed instances. Startup then requires OIDC, HTTPS identity/model endpoints, PostgreSQL application/checkpoint databases, `SUPPORTOPS_SEED_DEMO_DATA=false`, `SUPPORTOPS_AUTO_CREATE_SCHEMA=false`, and an explicit `SUPPORTOPS_ALLOWED_HOSTS` JSON list without `*` or `testserver`. Include `127.0.0.1` if the container healthcheck uses it. See the production configuration in [operations](docs/OPERATIONS.md). These checks do not implement TLS ingress, real connectors, secret management, or retention for you.
+
+The viewer role can read authorized investigations but cannot create, retry, approve, or decline them. Both the API and UI enforce the server-provided role. Disabling demo seeding prevents new synthetic identities; it does not delete previously seeded records. Use a clean, migrated database and explicitly provision production users/accounts.
+
 ## Repository map
 
 - `backend/supportops/api.py`: HTTP/auth boundaries and approval API.
@@ -133,7 +137,7 @@ Provision authorized subjects via `scripts/admin.py provision-user`. This is an 
 - `retrieval.py`: indexing, hybrid retrieval and context packing.
 - `security.py`, `guardrails.py`, `actions.py`: authorization, masking, verification and action execution.
 - `db.py`, `migrations/`: persistence and schema changes.
-- `frontend/src/`: responsive investigation console.
+- `frontend/src/App.tsx`: investigation console; `api.ts` owns cancellable, timed HTTP requests; `TraceView.tsx` isolates trace rendering; `types.ts` holds API types.
 - `data/runbooks/`, `seed.py`: explicitly synthetic corpus and diagnostics.
 - `evals/`, `backend/tests/`, `frontend/e2e/`: evaluation and regression coverage.
 - `docs/ARCHITECTURE.md`, `docs/OPERATIONS.md`, `docs/INTERVIEW_GUIDE.md`: system decisions, operations, and interview walkthrough.
@@ -146,7 +150,7 @@ The workflow handles one investigation per case; it does not implement an unlimi
 
 ## Delivery verification
 
-See [the verification record](docs/VERIFICATION.md) for executed checks and their limits: 48 tests passed, PostgreSQL migrations and workflow recovery verified, 12/12 development evaluation scenarios passed, and the frontend production build passed.
+See [the verification record](docs/VERIFICATION.md) for the latest executed checks and their limits, including PostgreSQL, retrieval, workflow recovery, evaluation scenarios, and frontend validation.
 
 ### LLM-only provider access
 
@@ -155,6 +159,8 @@ If your provider allows chat models but denies embedding requests, set `SUPPORTO
 ### Investigation refresh and provider blocks
 
 The console loads account and identity data once per session/identity change. It polls cases only while a case is queued or running, and fetches traces only when the Execution trace tab is open. Trace polling stops at a terminal or approval state. Requests do not overlap, hidden tabs pause, and network errors use bounded backoff. Refresh the page to discover changes made in a different session when this session is idle.
+
+Polling requests `/api/cases?summary=true`, which omits evidence, results, approval payloads and internal records. The selected case's full detail is fetched only on selection or when its update timestamp changes. The API also supports bounded `limit` and `offset`; the console displays the newest 100 cases. Requests time out after 15 seconds, identity changes cancel pending requests, and expired tokens return the UI to sign-in. Mutations are never automatically retried after a timeout; refresh to confirm their outcome first. `npm run check` checks TypeScript (including unused declarations) and formatting.
 
 A provider-side policy rejection (including Model Armor) is shown as a provider safety block, not a model outage. The app does not retry or route these requests to a fallback model. Review the submitted data and provider policy; configuring a different route is not a remedy for a safety block. Provider response bodies and sensitive findings are excluded from stored traces; controlled failure codes and HTTP status are retained.
 

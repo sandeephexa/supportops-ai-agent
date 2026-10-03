@@ -3,6 +3,7 @@ import math
 import re
 import time
 from collections import Counter
+from heapq import nlargest
 
 from langchain_openai import OpenAIEmbeddings
 from sqlalchemy import select, text
@@ -51,6 +52,8 @@ def demo_embedding(value, dimensions=256):
 
 
 def chunk_markdown(markdown, max_words=350):
+    if max_words <= 40:
+        raise ValueError("Chunk size must exceed the 40-word overlap")
     title = "Runbook"
     section, paragraphs = "Overview", []
     sections = []
@@ -122,13 +125,13 @@ class Retriever:
             raise ValueError("Document quarantined: suspected instructions directed at the agent")
         chunks = list(chunk_markdown(raw))
         vectors = self.embed([f"{title} {section} {content}" for title, section, content, _ in chunks])
-        ids = []
+        ids = set()
         with self.db.session() as session:
             for index, ((title, section, content, parent), embedding) in enumerate(
                 zip(chunks, vectors, strict=True)
             ):
                 doc_id = f"{tenant_id}:{path.stem}:v{version}:{index}"
-                ids.append(doc_id)
+                ids.add(doc_id)
                 doc = session.get(Document, doc_id) or Document(id=doc_id)
                 doc.tenant_id, doc.title, doc.version, doc.section = tenant_id, title, version, section
                 doc.content, doc.parent_content = content, parent
@@ -138,12 +141,14 @@ class Retriever:
                 session.add(doc)
             # Retire removed chunks on re-ingestion, so obsolete evidence cannot linger.
             old = session.scalars(
-                select(Document).where(Document.id.like(f"{tenant_id}:{path.stem}:v{version}:%"))
+                select(Document).where(
+                    Document.id.startswith(f"{tenant_id}:{path.stem}:v{version}:", autoescape=True)
+                )
             ).all()
             for doc in old:
                 if doc.id not in ids:
                     doc.active = False
-        return ids
+        return sorted(ids)
 
     def search(self, principal, account_id, query, case_id, limit=5):
         account = authorize_account(self.db, principal, account_id)
@@ -178,17 +183,22 @@ class Retriever:
                     ).all()
                 else:
                     docs = session.scalars(select(Document).where(*filters)).all()
-                    dense = sorted(
+                    dense = nlargest(
+                        30,
                         docs,
                         key=lambda d: sum(a * b for a, b in zip(d.embedding, vector, strict=True)),
-                        reverse=True,
-                    )[:30]
+                    )
                     q = Counter(tokens(query))
-                    lexical = sorted(
-                        [doc for doc in docs if set(tokens(doc.content)) & set(q)],
-                        key=lambda d: sum(min(n, Counter(tokens(d.content))[t]) for t, n in q.items()),
-                        reverse=True,
-                    )[:30]
+                    # Tokenize each document once, not once per query term during sorting.
+                    counts = {doc.id: Counter(tokens(doc.content)) for doc in docs}
+                    lexical_scores = {
+                        doc.id: sum(min(n, counts[doc.id][t]) for t, n in q.items()) for doc in docs
+                    }
+                    lexical = nlargest(
+                        30,
+                        (doc for doc in docs if lexical_scores[doc.id]),
+                        key=lambda d: lexical_scores[d.id],
+                    )
                 scores, by_id = {}, {}
                 for ranked in [dense, lexical]:
                     for rank, doc in enumerate(ranked):

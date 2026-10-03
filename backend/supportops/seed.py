@@ -79,7 +79,7 @@ ACCOUNTS = [
 ]
 
 
-def seed(db, retriever):
+def seed_demo_records(db):
     with db.session() as session:
         for data in ACCOUNTS:
             if not session.get(Account, data["id"]):
@@ -109,6 +109,11 @@ def seed(db, retriever):
         ]:
             if not session.get(User, user.id):
                 session.add(user)
+
+
+def seed(db, retriever, demo_data=True):
+    if demo_data:
+        seed_demo_records(db)
     # Check each file, so an interrupted reindex is resumed rather than accepted as complete.
     for path in sorted((ROOT / "data" / "runbooks").glob("*.md")):
         clean, _ = mask(path.read_text())
@@ -118,7 +123,9 @@ def seed(db, retriever):
         }
         with db.session() as session:
             rows = session.scalars(
-                select(Document).where(Document.id.like(f"public:{path.stem}:v3:%"), Document.active)
+                select(Document).where(
+                    Document.id.startswith(f"public:{path.stem}:v3:", autoescape=True), Document.active
+                )
             ).all()
             current = {row.id: row.content_hash for row in rows if row.embedding_version == retriever.version}
         if current != expected:

@@ -1,3 +1,4 @@
+import logging
 import time
 from contextlib import contextmanager
 
@@ -5,8 +6,11 @@ from opentelemetry import trace
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from sqlalchemy.exc import SQLAlchemyError
 
 from supportops.db import TraceEvent
+
+logger = logging.getLogger(__name__)
 
 
 class Telemetry:
@@ -43,16 +47,21 @@ class Telemetry:
                 for key, value in attributes.items():
                     if isinstance(value, (str, int, float, bool)):
                         span.set_attribute(key, value)
-                with self.db.session() as session:
-                    session.add(
-                        TraceEvent(
-                            case_id=case_id,
-                            name=name,
-                            duration_ms=round(duration, 2),
-                            status=status,
-                            attributes=attributes,
+                try:
+                    with self.db.session() as session:
+                        session.add(
+                            TraceEvent(
+                                case_id=case_id,
+                                name=name,
+                                duration_ms=round(duration, 2),
+                                status=status,
+                                attributes=attributes,
+                            )
                         )
-                    )
+                except SQLAlchemyError as exc:
+                    # Optional trace storage must not change execution outcomes or mask errors.
+                    # Action/audit persistence remains transactional and is never swallowed.
+                    logger.warning("Trace persistence failed type=%s", type(exc).__name__)
 
     def shutdown(self):
         self.provider.shutdown()

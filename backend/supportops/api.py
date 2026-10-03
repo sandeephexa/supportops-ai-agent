@@ -3,13 +3,15 @@ from contextlib import ExitStack, asynccontextmanager
 from pathlib import Path
 
 import jwt
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.checkpoint.sqlite import SqliteSaver
 from opentelemetry import trace as otel_trace
-from sqlalchemy import func, inspect, select, update
+from sqlalchemy import func, inspect, select, text, update
+from sqlalchemy.exc import OperationalError
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from supportops.config import ROOT, Settings
 from supportops.db import Account, AuditEvent, Case, Database, TraceEvent
@@ -17,7 +19,7 @@ from supportops.guardrails import SafetyViolation, validate_input
 from supportops.models import ModelGateway
 from supportops.retrieval import Retriever
 from supportops.schemas import ApprovalRequest, CreateCase
-from supportops.security import Principal, authorize_account, authorize_case, current_user
+from supportops.security import Principal, authorize_account, authorize_case, current_user, require_engineer
 from supportops.seed import seed
 from supportops.telemetry import Telemetry
 from supportops.tools import ToolGateway
@@ -43,13 +45,14 @@ def create_app(settings=None):
 
     @asynccontextmanager
     async def lifespan(app):
-        db = Database(settings.database_url)
-        db.initialize(settings.auto_create_schema)
-        telemetry = Telemetry(db, settings)
-        retriever = Retriever(db, settings, telemetry)
-        # Seeded operational connectors remain synthetic in both model modes.
-        seed(db, retriever)
         with ExitStack() as stack:
+            db = Database(settings.database_url)
+            stack.callback(db.engine.dispose)
+            db.initialize(settings.auto_create_schema)
+            telemetry = Telemetry(db, settings)
+            stack.callback(telemetry.shutdown)
+            retriever = Retriever(db, settings, telemetry)
+            seed(db, retriever, demo_data=settings.seed_demo_data)
             if settings.checkpoint_url.startswith("sqlite"):
                 path = settings.checkpoint_url.split("///", 1)[-1]
                 Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -75,10 +78,8 @@ def create_app(settings=None):
                 app.state.jwks = jwt.PyJWKClient(settings.oidc_jwks_url, cache_keys=True, lifespan=300)
             if settings.worker_enabled:
                 worker.start()
+            stack.callback(worker.stop)
             yield
-            worker.stop()
-            telemetry.shutdown()
-        db.engine.dispose()
 
     app = FastAPI(
         title="SupportOps AI",
@@ -87,9 +88,11 @@ def create_app(settings=None):
         docs_url="/api/docs",
         openapi_url="/api/openapi.json",
     )
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts)
 
     @app.middleware("http")
     async def boundaries(request, call_next):
+        response = None
         if request.method in ["POST", "PUT", "PATCH"]:
             # Bound the streamed body, including requests without Content-Length.
             size = 0
@@ -97,26 +100,49 @@ def create_app(settings=None):
             async for chunk in request.stream():
                 size += len(chunk)
                 if size > 32768:
-                    return JSONResponse({"detail": "Request body too large"}, status_code=413)
+                    response = JSONResponse({"detail": "Request body too large"}, status_code=413)
+                    break
                 body.extend(chunk)
             request._body = bytes(body)
         with app.state.telemetry.tracer.start_as_current_span(
             "http.request", record_exception=False, set_status_on_exception=False
         ) as http_span:
             http_span.set_attribute("http.request.method", request.method)
-            response = await call_next(request)
+            if response is None:
+                response = await call_next(request)
             route = request.scope.get("route")
             http_span.set_attribute("http.route", getattr(route, "path", "unmatched"))
             http_span.set_attribute("http.response.status_code", response.status_code)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["X-Frame-Options"] = "DENY"
-        response.headers["Cache-Control"] = "no-store"
+        response.headers["Cache-Control"] = (
+            "public, max-age=31536000, immutable"
+            if request.url.path.startswith("/assets/") and response.status_code == 200
+            else "no-store"
+        )
         if not request.url.path.startswith("/api/docs"):
             response.headers["Content-Security-Policy"] = (
                 "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'"
             )
         return response
+
+    @app.exception_handler(OperationalError)
+    async def database_unavailable(request, exc):
+        return JSONResponse(
+            {"detail": "Storage temporarily unavailable; try again later"},
+            status_code=503,
+            headers={"Retry-After": "5"},
+        )
+
+    @app.get("/api/ready")
+    def ready():
+        with app.state.db.engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+        worker = app.state.worker
+        if settings.worker_enabled and (worker.thread is None or not worker.thread.is_alive()):
+            raise HTTPException(503, "Investigation worker unavailable")
+        return {"status": "ready"}
 
     @app.get("/api/health")
     def health():
@@ -158,6 +184,7 @@ def create_app(settings=None):
 
     @app.post("/api/cases", status_code=202)
     def create_case(body: CreateCase, principal: Principal = Depends(current_user)):
+        require_engineer(principal)
         account = authorize_account(app.state.db, principal, body.account_id)
         try:
             question, events = validate_input(body.question)
@@ -166,11 +193,12 @@ def create_app(settings=None):
         with app.state.db.session() as session:
             # Transaction-scoped tenant lock makes admission quotas atomic on PostgreSQL.
             if app.state.db.is_postgres:
-                from sqlalchemy import text
-
                 session.execute(
                     text("SELECT pg_advisory_xact_lock(hashtext(:tenant))"), {"tenant": principal.tenant_id}
                 )
+            else:
+                # Serialize admission checks and inserts on SQLite as well as PostgreSQL.
+                session.execute(text("BEGIN IMMEDIATE"))
             recent = session.scalar(
                 select(func.count())
                 .select_from(Case)
@@ -201,14 +229,36 @@ def create_app(settings=None):
         return result
 
     @app.get("/api/cases")
-    def cases(principal: Principal = Depends(current_user)):
+    def cases(
+        principal: Principal = Depends(current_user),
+        summary: bool = False,
+        limit: int = Query(default=100, ge=1, le=100),
+        offset: int = Query(default=0, ge=0, le=10000),
+    ):
         with app.state.db.session() as session:
-            records = session.scalars(
-                select(Case)
+            columns = (
+                [
+                    Case.id,
+                    Case.account_id,
+                    Case.question,
+                    Case.status,
+                    Case.phase,
+                    Case.created_at,
+                    Case.updated_at,
+                ]
+                if summary
+                else [Case]
+            )
+            query = (
+                select(*columns)
                 .where(Case.tenant_id == principal.tenant_id, Case.account_id.in_(principal.account_ids))
-                .order_by(Case.created_at.desc())
-                .limit(100)
-            ).all()
+                .order_by(Case.created_at.desc(), Case.id.desc())
+                .limit(limit)
+                .offset(offset)
+            )
+            if summary:
+                return [dict(row) for row in session.execute(query).mappings()]
+            records = session.scalars(query).all()
             return [serialize(c) for c in records]
 
     @app.get("/api/cases/{case_id}")
@@ -230,8 +280,7 @@ def create_app(settings=None):
     @app.post("/api/cases/{case_id}/approval", status_code=202)
     def approve(case_id: str, body: ApprovalRequest, principal: Principal = Depends(current_user)):
         case = authorize_case(app.state.db, principal, case_id)
-        if principal.role != "engineer":
-            raise HTTPException(403, "An engineer must approve escalations")
+        require_engineer(principal)
         if not case.draft or case.draft["payload_hash"] != body.payload_hash:
             raise HTTPException(409, "Draft changed; review it again")
         if case.draft["expires_at"] < time.time():
@@ -271,6 +320,7 @@ def create_app(settings=None):
 
     @app.post("/api/cases/{case_id}/retry", status_code=202)
     def retry(case_id: str, principal: Principal = Depends(current_user)):
+        require_engineer(principal)
         case = authorize_case(app.state.db, principal, case_id)
         if not serialize(case)["retryable"]:
             raise HTTPException(409, "Case cannot be retried; start a fresh investigation")
@@ -287,7 +337,7 @@ def create_app(settings=None):
         return {"id": case_id, "status": "queued"}
 
     frontend = ROOT / "frontend" / "dist"
-    if frontend.exists():
+    if (frontend / "index.html").is_file() and (frontend / "assets").is_dir():
         app.mount("/assets", StaticFiles(directory=frontend / "assets"), name="assets")
 
         @app.get("/")
